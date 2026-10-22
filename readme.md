@@ -49,6 +49,9 @@ stops that service and opens the phone right away. macOS restarts the service by
 - In list view, double-click a folder to open it. In column view, click a folder to show its
   contents in the next column, and click a file to see its details. Use the path bar or ⌘↑
   to go back.
+- Click a file or folder to see its size at the bottom of the window. A folder's size is added
+  up from everything inside it, which can take a moment for big folders. Once known, it also
+  shows in the list's Size column.
 - Double-click a file to open a copy of it on the Mac.
 - **Copy to Mac** (⇧⌘D) copies the selected files and folders to a folder you choose, then shows
   them in Finder.

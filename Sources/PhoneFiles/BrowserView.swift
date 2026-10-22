@@ -166,7 +166,7 @@ struct FileTable: View {
             .width(min: 120, ideal: 170)
 
             TableColumn("Size", value: \.size) { item in
-                Text(item.isFolder ? "—" : formatBytes(item.size))
+                Text(item.isFolder ? model.folderSizes[item.id].map { formatBytes($0.bytes) } ?? "—" : formatBytes(item.size))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -379,8 +379,22 @@ struct StatusBar: View {
     @EnvironmentObject private var model: PhoneModel
 
     var body: some View {
-        HStack {
-            Text(summary)
+        HStack(spacing: 6) {
+            if let info = model.sizeInfo {
+                Text(name(of: info))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if let size = info.summary {
+                    Text(describe(size, folders: info.items.contains(where: \.isFolder)))
+                        .layoutPriority(1)
+                } else {
+                    ProgressView().controlSize(.mini)
+                    Text("Calculating size…")
+                        .layoutPriority(1)
+                }
+            } else {
+                Text(summary)
+            }
             Spacer()
             if let storage = model.currentStorage {
                 Text("\(formatBytes(storage.freeBytes)) available")
@@ -390,6 +404,17 @@ struct StatusBar: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+    }
+
+    private func name(of info: SizeInfo) -> String {
+        info.items.count == 1 ? "“\(info.items[0].name)”:" : "\(info.items.count) items selected:"
+    }
+
+    /// "3.2 MB", or with folders, "1.2 GB in 340 files".
+    private func describe(_ size: SizeSummary, folders: Bool) -> String {
+        guard folders else { return formatBytes(size.bytes) }
+        let files = size.files == 1 ? "1 file" : "\(size.files.formatted()) files"
+        return "\(formatBytes(size.bytes)) in \(files)"
     }
 
     private var summary: String {

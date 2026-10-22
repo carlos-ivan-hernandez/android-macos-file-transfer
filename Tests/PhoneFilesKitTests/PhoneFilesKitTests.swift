@@ -217,6 +217,19 @@ final class PhoneFilesKitTests: XCTestCase {
         XCTAssertEqual(left, [])
     }
 
+    func testSizeCounterAddsUpNestedFolders() async throws {
+        let phone = FakePhone()
+        let dcim = phone.add("DCIM", folder: true)
+        let camera = phone.add("Camera", in: dcim, folder: true)
+        phone.add("one.jpg", in: camera, data: "12345")
+        phone.add("two.jpg", in: camera, data: "123")
+        phone.add("notes.txt", in: dcim, data: "12")
+        phone.add("empty", in: dcim, folder: true)
+
+        let summary = try await SizeCounter.measure(phone.item(dcim), on: phone)
+        XCTAssertEqual(summary, SizeSummary(bytes: 10, files: 3))
+    }
+
     func testProgressFraction() {
         XCTAssertEqual(TransferProgress(title: "", bytesDone: 50, bytesTotal: 200).fraction, 0.25)
         XCTAssertEqual(TransferProgress(title: "", fileNumber: 3, fileCount: 4).fraction, 0.5)

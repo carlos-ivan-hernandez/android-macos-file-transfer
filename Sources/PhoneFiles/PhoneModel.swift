@@ -2,6 +2,12 @@ import AppKit
 import PhoneFilesKit
 import SwiftUI
 
+/// The size of the selected items. `summary` is nil while folders are still being added up.
+struct SizeInfo: Equatable {
+    let items: [PhoneItem]
+    var summary: SizeSummary?
+}
+
 struct AlertInfo: Identifiable {
     let id = UUID()
     let title: String
@@ -37,17 +43,22 @@ final class PhoneModel: ObservableObject {
         didSet {
             UserDefaults.standard.set(viewMode.rawValue, forKey: Self.viewModeKey)
             loadMissingFolders()
+            updateSizeInfo()
         }
     }
 
     /// The folders from the storage's top level down to the current folder. In column view,
     /// each one is a column, and the last one is highlighted.
-    @Published private(set) var path: [PhoneItem] = []
+    @Published private(set) var path: [PhoneItem] = [] {
+        didSet { updateSizeInfo() }
+    }
     /// What's in each folder that has been read, by folder ID.
     @Published private(set) var listings: [UInt32: [PhoneItem]] = [:]
     @Published private(set) var loadingFolders: Set<UInt32> = []
     /// Selected items in the current folder.
-    @Published var selection = Set<PhoneItem.ID>()
+    @Published var selection = Set<PhoneItem.ID>() {
+        didSet { updateSizeInfo() }
+    }
     @Published var sortOrder = [KeyPathComparator(\PhoneItem.name, comparator: String.StandardComparator.localizedStandard)]
 
     @Published private(set) var transfer: TransferProgress?
@@ -55,11 +66,15 @@ final class PhoneModel: ObservableObject {
     @Published var pendingDelete: [PhoneItem] = []
     @Published var newFolderPrompt = false
     @Published var newFolderName = ""
+    @Published private(set) var sizeInfo: SizeInfo?
+    /// Folder sizes added up so far, by folder ID. Cleared on refresh and after changes.
+    @Published private(set) var folderSizes: [UInt32: SizeSummary] = [:]
 
     private var connection: MTPConnection?
     private var usbWatcher: USBRemovalWatcher?
     private var cancelFlag: CancelFlag?
     private var watchTask: Task<Void, Never>?
+    private var sizeTask: Task<Void, Never>?
     private var connecting = false
     private var loadGenerations: [UInt32: Int] = [:]
 
@@ -246,6 +261,7 @@ final class PhoneModel: ObservableObject {
         pendingDelete = []
         newFolderPrompt = false
         status = .waiting(problem: nil)
+        forgetSizes()
         guard let old else { return nil }
         return Task { await old.close() }
     }
@@ -255,6 +271,7 @@ final class PhoneModel: ObservableObject {
     /// Reads the folders being shown again.
     func reload() {
         let folders = viewMode == .columns ? columnFolders : [currentFolderID]
+        forgetSizes()
         Task {
             for folder in folders { await load(folder) }
         }
@@ -458,8 +475,62 @@ final class PhoneModel: ObservableObject {
                 cancelFlag = nil
                 transfer = nil
             }
-            if refreshAfter, self.connection === connection { await load(currentFolderID) }
+            if refreshAfter, self.connection === connection {
+                forgetSizes()
+                await load(currentFolderID)
+            }
         }
+    }
+
+    // MARK: Sizes
+
+    /// Works out the size of what's selected (in column view, the highlighted folder when nothing
+    /// else is). Folders are added up in the background.
+    private func updateSizeInfo() {
+        let chosen = actionItems
+        let ids = chosen.map(\.id)
+        guard ids != sizeInfo?.items.map(\.id) else { return }
+        sizeTask?.cancel()
+        sizeTask = nil
+        guard !chosen.isEmpty else {
+            sizeInfo = nil
+            return
+        }
+        let unmeasured = chosen.filter { $0.isFolder && folderSizes[$0.id] == nil }
+        guard !unmeasured.isEmpty, let connection else {
+            sizeInfo = SizeInfo(items: chosen, summary: totalSize(of: chosen))
+            return
+        }
+        sizeInfo = SizeInfo(items: chosen, summary: nil)
+        sizeTask = Task {
+            do {
+                for folder in unmeasured {
+                    let size = try await SizeCounter.measure(folder, on: connection)
+                    guard !Task.isCancelled, self.connection === connection else { return }
+                    folderSizes[folder.id] = size
+                }
+                guard !Task.isCancelled, sizeInfo?.items.map(\.id) == ids else { return }
+                sizeInfo = SizeInfo(items: chosen, summary: totalSize(of: chosen))
+            } catch {
+                // Cancelled, or the folder couldn't be read: show no size rather than a wrong one.
+                if !Task.isCancelled, sizeInfo?.items.map(\.id) == ids { sizeInfo = nil }
+            }
+        }
+    }
+
+    private func totalSize(of items: [PhoneItem]) -> SizeSummary {
+        items.reduce(SizeSummary()) { total, item in
+            total + (item.isFolder ? folderSizes[item.id] ?? SizeSummary() : SizeSummary(bytes: item.size, files: 1))
+        }
+    }
+
+    /// Drops saved folder sizes, which may be out of date, and works out the selection's size again.
+    private func forgetSizes() {
+        sizeTask?.cancel()
+        sizeTask = nil
+        folderSizes = [:]
+        sizeInfo = nil
+        updateSizeInfo()
     }
 
     /// Shows an error, or goes back to waiting if the phone was unplugged.
