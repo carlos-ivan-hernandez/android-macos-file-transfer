@@ -16,22 +16,37 @@ final class PhoneModel: ObservableObject {
         case connected
     }
 
+    enum ViewMode: String {
+        case list, columns
+    }
+
     @Published private(set) var status: Status = .waiting(problem: nil)
     @Published private(set) var deviceName = ""
     @Published private(set) var storages: [PhoneStorage] = []
     @Published var storageID: UInt32? {
         didSet {
             guard oldValue != storageID else { return }
+            listings = [:]
             path = []
             selection = []
-            reload()
+            navigated()
         }
     }
 
-    /// The folders from the storage's top level down to the one being shown.
+    @Published var viewMode: ViewMode {
+        didSet {
+            UserDefaults.standard.set(viewMode.rawValue, forKey: Self.viewModeKey)
+            loadMissingFolders()
+        }
+    }
+
+    /// The folders from the storage's top level down to the current folder. In column view,
+    /// each one is a column, and the last one is highlighted.
     @Published private(set) var path: [PhoneItem] = []
-    @Published private(set) var items: [PhoneItem] = []
-    @Published private(set) var isLoading = false
+    /// What's in each folder that has been read, by folder ID.
+    @Published private(set) var listings: [UInt32: [PhoneItem]] = [:]
+    @Published private(set) var loadingFolders: Set<UInt32> = []
+    /// Selected items in the current folder.
     @Published var selection = Set<PhoneItem.ID>()
     @Published var sortOrder = [KeyPathComparator(\PhoneItem.name, comparator: String.StandardComparator.localizedStandard)]
 
@@ -42,14 +57,17 @@ final class PhoneModel: ObservableObject {
     @Published var newFolderName = ""
 
     private var connection: MTPConnection?
+    private var usbWatcher: USBRemovalWatcher?
     private var cancelFlag: CancelFlag?
     private var watchTask: Task<Void, Never>?
     private var connecting = false
-    private var loadGeneration = 0
+    private var loadGenerations: [UInt32: Int] = [:]
 
     private static let lastFolderKey = "LastCopyToMacFolder"
+    private static let viewModeKey = "ViewMode"
 
     init() {
+        viewMode = UserDefaults.standard.string(forKey: Self.viewModeKey).flatMap(ViewMode.init) ?? .list
         watchForPhone()
     }
 
@@ -60,15 +78,68 @@ final class PhoneModel: ObservableObject {
     var currentFolderID: UInt32 { path.last?.id ?? PhoneFolder.root }
     var currentStorage: PhoneStorage? { storages.first { $0.id == storageID } }
 
-    /// Folders first, each group in the table's sort order.
-    var sortedItems: [PhoneItem] {
-        items.filter(\.isFolder).sorted(using: sortOrder) + items.filter { !$0.isFolder }.sorted(using: sortOrder)
+    /// What's in the current folder.
+    var items: [PhoneItem] { listings[currentFolderID] ?? [] }
+    var isLoading: Bool { loadingFolders.contains(currentFolderID) }
+    var sortedItems: [PhoneItem] { sorted(items) }
+    var selectedItems: [PhoneItem] { items(for: selection) }
+
+    /// What the toolbar's Copy to Mac and Delete act on. In column view, with nothing selected in
+    /// the last column, that's the highlighted folder, as in Finder.
+    var actionItems: [PhoneItem] {
+        if !selection.isEmpty { return selectedItems }
+        if viewMode == .columns, let folder = path.last { return [folder] }
+        return []
     }
 
-    var selectedItems: [PhoneItem] { items(for: selection) }
+    /// The single selected file, shown in column view's preview.
+    var previewItem: PhoneItem? {
+        guard selection.count == 1 else { return nil }
+        return items.first { selection.contains($0.id) && !$0.isFolder }
+    }
 
     func items(for ids: Set<PhoneItem.ID>) -> [PhoneItem] {
         sortedItems.filter { ids.contains($0.id) }
+    }
+
+    /// Folders first, each group in the table's sort order.
+    func sorted(_ items: [PhoneItem]) -> [PhoneItem] {
+        items.filter(\.isFolder).sorted(using: sortOrder) + items.filter { !$0.isFolder }.sorted(using: sortOrder)
+    }
+
+    // MARK: Columns
+
+    /// The folder shown in each column: the top of the storage, then each folder in `path`.
+    var columnFolders: [UInt32] { [PhoneFolder.root] + path.map(\.id) }
+
+    func columnItems(_ column: Int) -> [PhoneItem] {
+        guard column < columnFolders.count else { return [] }
+        return sorted(listings[columnFolders[column]] ?? [])
+    }
+
+    func isColumnLoading(_ column: Int) -> Bool {
+        column < columnFolders.count && loadingFolders.contains(columnFolders[column])
+    }
+
+    /// The highlighted rows in a column: the open folder for earlier columns, the selection for the last.
+    func columnSelection(_ column: Int) -> Set<PhoneItem.ID> {
+        if column < path.count { return [path[column].id] }
+        return column == path.count ? selection : []
+    }
+
+    /// Choosing a single folder in a column opens it in the next column. Anything else closes the
+    /// columns to its right and becomes the selection.
+    func selectInColumn(_ column: Int, _ ids: Set<PhoneItem.ID>) {
+        guard !isBusy, column <= path.count, ids != columnSelection(column) else { return }
+        let columnItems = listings[columnFolders[column]] ?? []
+        path = Array(path.prefix(column))
+        if ids.count == 1, let folder = columnItems.first(where: { ids.contains($0.id) }), folder.isFolder {
+            path.append(folder)
+            selection = []
+            navigated()
+        } else {
+            selection = ids
+        }
     }
 
     // MARK: Connecting
@@ -100,6 +171,11 @@ final class PhoneModel: ObservableObject {
             do {
                 let found = try await newConnection.storages()
                 connection = newConnection
+                usbWatcher = USBRemovalWatcher(
+                    vendorID: newConnection.info.vendorID, productID: newConnection.info.productID
+                ) { [weak self] in
+                    Task { @MainActor in self?.phoneUnplugged() }
+                }
                 deviceName = newConnection.info.name
                 storages = found
                 status = .connected
@@ -127,61 +203,108 @@ final class PhoneModel: ObservableObject {
         Task { await connect() }
     }
 
-    func disconnect() {
+    /// Closes the connection and opens the phone again.
+    func reconnect() {
+        let closing = dropConnection()
         Task {
-            await dropConnection()
+            await closing?.value
             watchForPhone()
         }
     }
 
-    private func dropConnection() async {
+    private func phoneUnplugged() {
+        guard connection != nil else { return }
+        if isBusy {
+            alert = AlertInfo(
+                title: "The phone was disconnected",
+                message: "The copy stopped. Files that finished copying were kept."
+            )
+        }
+        let closing = dropConnection()
+        Task {
+            await closing?.value
+            watchForPhone()
+        }
+    }
+
+    /// Clears everything about the phone right away. Returns the task that closes the connection,
+    /// which waits for libmtp to finish its current call.
+    @discardableResult
+    private func dropConnection() -> Task<Void, Never>? {
         cancelFlag?.cancel()
+        cancelFlag = nil
+        transfer = nil
+        usbWatcher = nil
         let old = connection
         connection = nil
+        storageID = nil
         storages = []
-        items = []
+        listings = [:]
+        loadingFolders = []
         path = []
         selection = []
-        storageID = nil
+        pendingDelete = []
+        newFolderPrompt = false
         status = .waiting(problem: nil)
-        await old?.close()
+        guard let old else { return nil }
+        return Task { await old.close() }
     }
 
     // MARK: Browsing
 
+    /// Reads the folders being shown again.
     func reload() {
-        Task { await loadItems() }
+        let folders = viewMode == .columns ? columnFolders : [currentFolderID]
+        Task {
+            for folder in folders { await load(folder) }
+        }
     }
 
-    func loadItems() async {
-        loadGeneration += 1
-        let generation = loadGeneration
-        guard let connection, let storageID else {
-            items = []
-            return
+    /// After `path` changes: reads the current folder, plus any column that hasn't been read yet.
+    private func navigated() {
+        Task { await load(currentFolderID) }
+        loadMissingFolders()
+    }
+
+    private func loadMissingFolders() {
+        guard viewMode == .columns else { return }
+        for folder in columnFolders where listings[folder] == nil && !loadingFolders.contains(folder) {
+            Task { await load(folder) }
         }
-        isLoading = true
+    }
+
+    private func load(_ folder: UInt32) async {
+        guard let connection, let storageID else { return }
+        let generation = (loadGenerations[folder] ?? 0) + 1
+        loadGenerations[folder] = generation
+        loadingFolders.insert(folder)
+        let result: Result<[PhoneItem], Error>
         do {
-            let found = try await connection.list(storage: storageID, folder: currentFolderID)
-            guard generation == loadGeneration else { return }
-            items = found
-            let ids = Set(found.map(\.id))
-            selection = selection.filter { ids.contains($0) }
+            result = .success(try await connection.list(storage: storageID, folder: folder))
         } catch {
-            guard generation == loadGeneration else { return }
-            items = []
+            result = .failure(error)
+        }
+        // Ignore the result if the folder was read again since, or the phone changed.
+        guard loadGenerations[folder] == generation, self.connection === connection else { return }
+        loadingFolders.remove(folder)
+        switch result {
+        case .success(let found):
+            listings[folder] = found
+            if folder == currentFolderID {
+                let ids = Set(found.map(\.id))
+                selection = selection.filter { ids.contains($0) }
+            }
+        case .failure(let error):
             await handle(error)
         }
-        isLoading = false
     }
 
     func open(_ item: PhoneItem) {
         guard !isBusy else { return }
         if item.isFolder {
-            path.append(item)
+            if path.last?.id != item.id { path.append(item) }
             selection = []
-            items = []
-            reload()
+            navigated()
         } else {
             openOnMac(item)
         }
@@ -190,9 +313,9 @@ final class PhoneModel: ObservableObject {
     func goUp() {
         guard !path.isEmpty, !isBusy else { return }
         let left = path.removeLast()
-        items = []
-        reload()
-        selection = [left.id]
+        // In column view the new last folder is highlighted; in list view the folder just left is.
+        selection = viewMode == .list ? [left.id] : []
+        navigated()
     }
 
     /// Shows the folder at `depth` in the path (0 is the top of the storage).
@@ -200,8 +323,7 @@ final class PhoneModel: ObservableObject {
         guard depth < path.count, !isBusy else { return }
         path = Array(path.prefix(depth))
         selection = []
-        items = []
-        reload()
+        navigated()
     }
 
     // MARK: Copying and deleting
@@ -267,7 +389,12 @@ final class PhoneModel: ObservableObject {
     func delete(_ chosen: [PhoneItem]) {
         pendingDelete = []
         guard !chosen.isEmpty else { return }
-        selection.subtract(chosen.map(\.id))
+        let ids = Set(chosen.map(\.id))
+        // Close any open column that's being deleted.
+        if let index = path.firstIndex(where: { ids.contains($0.id) }) {
+            path = Array(path.prefix(index))
+        }
+        selection.subtract(ids)
         runTransfer(refreshAfter: true) { transfers in
             try await transfers.delete(chosen)
         }
@@ -296,8 +423,8 @@ final class PhoneModel: ObservableObject {
         Task {
             do {
                 let created = try await connection.createFolder(named: name, storage: storageID, in: folder)
-                await loadItems()
-                selection = [created.id]
+                await load(folder)
+                if folder == currentFolderID { selection = [created.id] }
             } catch {
                 await handle(error)
             }
@@ -331,15 +458,16 @@ final class PhoneModel: ObservableObject {
                 cancelFlag = nil
                 transfer = nil
             }
-            if refreshAfter, self.connection === connection { await loadItems() }
+            if refreshAfter, self.connection === connection { await load(currentFolderID) }
         }
     }
 
     /// Shows an error, or goes back to waiting if the phone was unplugged.
     private func handle(_ error: Error) async {
-        if connection != nil, !(await MTPConnection.phoneAttached()) {
-            await dropConnection()
-            watchForPhone()
+        // The phone is already gone; `phoneUnplugged` has dealt with it.
+        guard connection != nil else { return }
+        if !(await MTPConnection.phoneAttached()) {
+            phoneUnplugged()
             return
         }
         var message = (error as? PhoneError)?.details ?? ""

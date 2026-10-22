@@ -10,6 +10,9 @@ public final class MTPConnection: PhoneDevice, @unchecked Sendable {
         public let name: String
         public let manufacturer: String?
         public let model: String?
+        /// USB IDs, for noticing when the phone is unplugged.
+        public let vendorID: UInt16
+        public let productID: UInt16
     }
 
     private static let queue = DispatchQueue(label: "PhoneFiles.libmtp")
@@ -233,7 +236,10 @@ public final class MTPConnection: PhoneDevice, @unchecked Sendable {
         LIBMTP_Clear_Errorstack(device)
         let fallback = [manufacturer, model].compactMap { $0 }.joined(separator: " ")
         let name = friendly ?? (fallback.isEmpty ? string(raw.device_entry.vendor) ?? "Android Phone" : fallback)
-        return Info(name: name, manufacturer: manufacturer, model: model)
+        return Info(
+            name: name, manufacturer: manufacturer, model: model,
+            vendorID: raw.device_entry.vendor_id, productID: raw.device_entry.product_id
+        )
     }
 
     private func openDevice() throws -> UnsafeMutablePointer<LIBMTP_mtpdevice_t> {

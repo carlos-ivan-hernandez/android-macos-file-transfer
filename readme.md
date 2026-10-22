@@ -32,7 +32,9 @@ swift test                       # run the tests
    **File transfer**.
 4. If the phone asks to allow access to phone data, tap **Allow**.
 
-PhoneFiles looks for the phone every two seconds and opens it as soon as it can.
+PhoneFiles looks for the phone every two seconds and opens it as soon as it can. If the phone
+is unplugged, PhoneFiles notices right away (macOS tells it), stops any copy, and waits for
+the phone to come back.
 
 If PhoneFiles says another app is using the phone, quit OpenMTP, Android File Transfer,
 Smart Switch, Image Capture, or Photos. macOS's photo import service (`ptpcamerad`) also
@@ -42,7 +44,11 @@ stops that service and opens the phone right away. macOS restarts the service by
 ## Using it
 
 - Pick a storage area (such as Internal storage) in the sidebar.
-- Double-click a folder to open it. Use the path bar or ⌘↑ to go back.
+- Switch between **list** (⌘2) and **column** (⌘3) view with the toolbar's view buttons, as in
+  Finder. PhoneFiles remembers your choice.
+- In list view, double-click a folder to open it. In column view, click a folder to show its
+  contents in the next column, and click a file to see its details. Use the path bar or ⌘↑
+  to go back.
 - Double-click a file to open a copy of it on the Mac.
 - **Copy to Mac** (⇧⌘D) copies the selected files and folders to a folder you choose, then shows
   them in Finder.
@@ -63,6 +69,7 @@ finished copying are kept.
 | `Sources/PhoneFilesKit/MTPConnection.swift` | The libmtp wrapper: connect, list, copy, create folders and delete |
 | `Sources/PhoneFilesKit/Transfers.swift` | Copies and deletes whole folders, picks free names, and reports progress |
 | `Sources/PhoneFiles` | The SwiftUI app |
+| `Sources/PhoneFiles/USBRemovalWatcher.swift` | Gets a notification from macOS (IOKit) the moment the phone is unplugged |
 
 libmtp isn't thread-safe, so every libmtp call runs on one serial queue. The copy and delete
 logic works through a small `PhoneDevice` protocol, so the tests use an in-memory fake phone

@@ -12,8 +12,12 @@ struct BrowserView: View {
         VStack(spacing: 0) {
             PathBar()
             Divider()
-            FileTable()
-                .overlay { emptyState }
+            Group {
+                switch model.viewMode {
+                case .list: FileTable().overlay { emptyState }
+                case .columns: ColumnBrowser()
+                }
+            }
                 .overlay {
                     if dropTargeted {
                         RoundedRectangle(cornerRadius: 6)
@@ -94,6 +98,14 @@ struct BrowserView: View {
             .keyboardShortcut(.upArrow, modifiers: .command)
             .disabled(model.path.isEmpty || model.isBusy)
         }
+        ToolbarItem(placement: .primaryAction) {
+            Picker("View", selection: $model.viewMode) {
+                Label("List", systemImage: "list.bullet").tag(PhoneModel.ViewMode.list)
+                Label("Columns", systemImage: "rectangle.split.3x1").tag(PhoneModel.ViewMode.columns)
+            }
+            .pickerStyle(.segmented)
+            .help("Show items as a list (⌘2) or in columns (⌘3)")
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Button { model.reload() } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
@@ -114,18 +126,18 @@ struct BrowserView: View {
             .help("Copy files from this Mac to the phone (⇧⌘U)")
             .disabled(model.isBusy)
 
-            Button { model.copyToMac(model.selectedItems) } label: {
+            Button { model.copyToMac(model.actionItems) } label: {
                 Label("Copy to Mac", systemImage: "square.and.arrow.down")
             }
             .help("Copy the selected items to this Mac (⇧⌘D)")
-            .disabled(model.selection.isEmpty || model.isBusy)
+            .disabled(model.actionItems.isEmpty || model.isBusy)
 
-            Button { model.confirmDelete(model.selectedItems) } label: {
+            Button { model.confirmDelete(model.actionItems) } label: {
                 Label("Delete", systemImage: "trash")
             }
             .help("Delete the selected items from the phone (⌘⌫)")
             .keyboardShortcut(.delete, modifiers: .command)
-            .disabled(model.selection.isEmpty || model.isBusy)
+            .disabled(model.actionItems.isEmpty || model.isBusy)
         }
     }
 }
@@ -162,24 +174,172 @@ struct FileTable: View {
         }
         .disabled(model.isBusy)
         .contextMenu(forSelectionType: PhoneItem.ID.self) { ids in
-            let items = model.items(for: ids)
-            if items.isEmpty {
-                Button("New Folder") { model.promptNewFolder() }
-                Button("Copy to Phone…") { model.chooseFilesForPhone() }
-            } else {
-                if items.count == 1 {
-                    Button(items[0].isFolder ? "Open" : "Open on Mac") { model.open(items[0]) }
-                    Divider()
-                }
-                Button("Copy to Mac…") { model.copyToMac(items) }
-                Divider()
-                Button("Delete…", role: .destructive) { model.confirmDelete(items) }
-            }
+            ItemMenu(items: model.items(for: ids), canAddHere: true)
         } primaryAction: { ids in
             let items = model.items(for: ids)
             if items.count == 1 { model.open(items[0]) }
         }
         .onDeleteCommand { model.confirmDelete(model.selectedItems) }
+    }
+}
+
+/// The right-click menu for rows in the list and in columns.
+struct ItemMenu: View {
+    @EnvironmentObject private var model: PhoneModel
+    let items: [PhoneItem]
+    /// Whether New Folder and Copy to Phone make sense here (they add to the current folder).
+    let canAddHere: Bool
+
+    var body: some View {
+        if items.isEmpty {
+            if canAddHere {
+                Button("New Folder") { model.promptNewFolder() }
+                Button("Copy to Phone…") { model.chooseFilesForPhone() }
+            }
+        } else {
+            if items.count == 1, !items[0].isFolder {
+                Button("Open on Mac") { model.open(items[0]) }
+                Divider()
+            } else if items.count == 1, model.viewMode == .list {
+                Button("Open") { model.open(items[0]) }
+                Divider()
+            }
+            Button("Copy to Mac…") { model.copyToMac(items) }
+            Divider()
+            Button("Delete…", role: .destructive) { model.confirmDelete(items) }
+        }
+    }
+}
+
+/// Finder-style columns: one per open folder, plus a preview of a selected file.
+struct ColumnBrowser: View {
+    @EnvironmentObject private var model: PhoneModel
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal) {
+                HStack(spacing: 0) {
+                    ForEach(0...model.path.count, id: \.self) { column in
+                        BrowserColumn(column: column)
+                            .frame(width: 240)
+                            .id(column)
+                        Divider()
+                    }
+                    if let file = model.previewItem {
+                        FilePreview(item: file)
+                            .frame(width: 280)
+                            .id("preview")
+                        Divider()
+                    }
+                }
+                .frame(maxHeight: .infinity)
+            }
+            .onChange(of: model.path.count) { count in
+                withAnimation { proxy.scrollTo(count, anchor: .trailing) }
+            }
+            .onChange(of: model.previewItem?.id) { id in
+                if id != nil { withAnimation { proxy.scrollTo("preview", anchor: .trailing) } }
+            }
+        }
+        .disabled(model.isBusy)
+    }
+}
+
+struct BrowserColumn: View {
+    @EnvironmentObject private var model: PhoneModel
+    let column: Int
+
+    var body: some View {
+        let items = model.columnItems(column)
+        List(selection: Binding(
+            get: { model.columnSelection(column) },
+            set: { model.selectInColumn(column, $0) }
+        )) {
+            ForEach(items) { item in
+                HStack(spacing: 6) {
+                    Image(nsImage: FileIcons.icon(for: item))
+                        .resizable()
+                        .frame(width: 16, height: 16)
+                    Text(item.name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    if item.isFolder {
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .tag(item.id)
+            }
+        }
+        .listStyle(.plain)
+        .overlay {
+            if items.isEmpty {
+                if model.isColumnLoading(column) {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Empty").foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .contextMenu(forSelectionType: PhoneItem.ID.self) { ids in
+            ItemMenu(
+                items: items.filter { ids.contains($0.id) },
+                canAddHere: column == model.path.count
+            )
+        } primaryAction: { ids in
+            if ids.count == 1, let item = items.first(where: { ids.contains($0.id) }), !item.isFolder {
+                model.open(item)
+            }
+        }
+    }
+}
+
+/// Details of the selected file, shown as the last column.
+struct FilePreview: View {
+    @EnvironmentObject private var model: PhoneModel
+    let item: PhoneItem
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(nsImage: FileIcons.icon(for: item))
+                .resizable()
+                .frame(width: 96, height: 96)
+            Text(item.name)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+                .lineLimit(4)
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 4) {
+                GridRow {
+                    Text("Kind").foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                    Text(kind)
+                }
+                GridRow {
+                    Text("Size").foregroundStyle(.secondary)
+                    Text(formatBytes(item.size))
+                }
+                if let modified = item.modified {
+                    GridRow {
+                        Text("Modified").foregroundStyle(.secondary)
+                        Text(modified.formatted(date: .abbreviated, time: .shortened))
+                    }
+                }
+            }
+            .font(.callout)
+            HStack {
+                Button("Open on Mac") { model.open(item) }
+                Button("Copy to Mac…") { model.copyToMac([item]) }
+            }
+            .controlSize(.small)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var kind: String {
+        let ext = (item.name as NSString).pathExtension
+        return UTType(filenameExtension: ext)?.localizedDescription ?? (ext.isEmpty ? "File" : ext.uppercased() + " file")
     }
 }
 

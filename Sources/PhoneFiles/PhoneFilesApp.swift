@@ -21,9 +21,16 @@ struct PhoneFilesApp: App {
                 Button("Copy to Phone…") { model.chooseFilesForPhone() }
                     .keyboardShortcut("u", modifiers: [.command, .shift])
                     .disabled(!model.isConnected || model.isBusy)
-                Button("Copy to Mac…") { model.copyToMac(model.selectedItems) }
+                Button("Copy to Mac…") { model.copyToMac(model.actionItems) }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
-                    .disabled(model.selectedItems.isEmpty || model.isBusy)
+                    .disabled(model.actionItems.isEmpty || model.isBusy)
+            }
+            CommandGroup(before: .toolbar) {
+                Button("as List") { model.viewMode = .list }
+                    .keyboardShortcut("2")
+                Button("as Columns") { model.viewMode = .columns }
+                    .keyboardShortcut("3")
+                Divider()
             }
         }
     }

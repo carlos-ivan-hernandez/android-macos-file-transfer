@@ -58,7 +58,7 @@ struct Sidebar: View {
         .safeAreaInset(edge: .bottom) {
             if model.isConnected {
                 Button {
-                    model.disconnect()
+                    model.reconnect()
                 } label: {
                     Label("Reconnect", systemImage: "arrow.triangle.2.circlepath")
                 }
