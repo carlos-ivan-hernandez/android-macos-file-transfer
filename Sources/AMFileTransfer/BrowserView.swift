@@ -212,17 +212,16 @@ struct ItemMenu: View {
 }
 
 /// Finder-style columns: one per open folder, plus a preview of a selected file.
-/// The arrow keys move through the columns while the browser has keyboard focus.
+/// The arrow keys move through the columns (see `ColumnKeyHandler`).
 struct ColumnBrowser: View {
     @EnvironmentObject private var model: PhoneModel
-    @FocusState private var focused: Bool
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: 0) {
                     ForEach(0...model.path.count, id: \.self) { column in
-                        BrowserColumn(column: column, browserFocused: focused) { focused = true }
+                        BrowserColumn(column: column)
                             .frame(width: 240)
                             .id(column)
                         Divider()
@@ -243,28 +242,27 @@ struct ColumnBrowser: View {
                 if id != nil { withAnimation { proxy.scrollTo("preview", anchor: .trailing) } }
             }
         }
-        .focusable()
-        .focused($focused)
-        .hideFocusRing()
-        .onMoveCommand { direction in model.moveInColumns(direction) }
-        .onDeleteCommand { model.confirmDelete(model.actionItems) }
-        .onAppear { focused = true }
+        .background {
+            ColumnKeyHandler { direction in
+                guard !model.isBusy else { return false }
+                model.moveInColumns(direction)
+                return true
+            }
+        }
         .disabled(model.isBusy)
     }
 }
 
 struct BrowserColumn: View {
     @EnvironmentObject private var model: PhoneModel
+    @Environment(\.controlActiveState) private var windowState
     let column: Int
-    let browserFocused: Bool
-    /// Gives the browser keyboard focus, so the arrow keys work after a click.
-    let focusBrowser: () -> Void
 
     var body: some View {
         let rows = model.columnItems(column)
         let selected = model.columnSelection(column)
         // Like Finder, the column with the cursor shows its selection in the accent color.
-        let emphasized = browserFocused && column == max(model.cursorColumn, 0)
+        let emphasized = windowState == .key && column == max(model.cursorColumn, 0)
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
@@ -291,7 +289,7 @@ struct BrowserColumn: View {
             // Right-clicking empty space in the last column adds to that folder.
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture { focusBrowser() }
+                .onTapGesture { ColumnKeyHandler.takeKeys() }
                 .contextMenu {
                     if column == model.path.count { ItemMenu(items: [], canAddHere: true) }
                 }
@@ -308,7 +306,7 @@ struct BrowserColumn: View {
     }
 
     private func click(_ item: PhoneItem) {
-        focusBrowser()
+        ColumnKeyHandler.takeKeys()
         let flags = NSEvent.modifierFlags
         model.click(
             item, inColumn: column,
@@ -351,14 +349,76 @@ struct ColumnRow: View {
     }
 }
 
-extension View {
-    /// Keyboard focus is shown by the selection color instead of a ring around the browser.
-    @ViewBuilder
-    func hideFocusRing() -> some View {
-        if #available(macOS 14.0, *) {
-            focusEffectDisabled()
-        } else {
-            self
+/// Reads the arrow keys for column view straight from the window's key events.
+///
+/// SwiftUI only gives a custom view like the column browser keyboard focus when Full Keyboard
+/// Access is turned on in System Settings, so `onMoveCommand` alone never fires for most people.
+/// Keys are left alone while a text field or the sidebar has focus, while a sheet or alert is
+/// open, and when ⌘, ⌥, ⌃ or ⇧ is held (so shortcuts like ⌘↑ still work).
+struct ColumnKeyHandler: NSViewRepresentable {
+    /// Returns whether the key was used.
+    let onMove: (MoveCommandDirection) -> Bool
+
+    func makeNSView(context: Context) -> KeyMonitorView {
+        let view = KeyMonitorView()
+        view.onMove = onMove
+        return view
+    }
+
+    func updateNSView(_ view: KeyMonitorView, context: Context) {
+        view.onMove = onMove
+    }
+
+    /// Takes keyboard focus away from the sidebar or a text field, so the arrow keys go to the
+    /// columns. Called when a column is clicked.
+    static func takeKeys() {
+        guard let window = NSApp.keyWindow, window.attachedSheet == nil else { return }
+        window.makeFirstResponder(nil)
+    }
+
+    final class KeyMonitorView: NSView {
+        var onMove: ((MoveCommandDirection) -> Bool)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopMonitoring()
+            guard let window else { return }
+            // The sidebar often has keyboard focus when column view appears; take the keys from it.
+            DispatchQueue.main.async {
+                if window.attachedSheet == nil, window.firstResponder is NSTableView {
+                    window.makeFirstResponder(nil)
+                }
+            }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, self.handle(event) else { return event }
+                return nil
+            }
+        }
+
+        deinit {
+            stopMonitoring()
+        }
+
+        private func stopMonitoring() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
+
+        private func handle(_ event: NSEvent) -> Bool {
+            guard let window, event.window === window, window.isKeyWindow, window.attachedSheet == nil,
+                  !(window.firstResponder is NSText), !(window.firstResponder is NSTableView),
+                  event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+            else { return false }
+            let direction: MoveCommandDirection
+            switch event.keyCode {
+            case 123: direction = .left
+            case 124: direction = .right
+            case 125: direction = .down
+            case 126: direction = .up
+            default: return false
+            }
+            return onMove?(direction) ?? false
         }
     }
 }
