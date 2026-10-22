@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 # libusb and libmtp, built for the app's minimum macOS version and linked into the app.
 ./scripts/build-libmtp.sh
-if [[ ! -f .deps/include/libmtp.h || ! -f .deps/lib/libmtp.a ]]; then
+if [[ ! -f Sources/CLibMTP/include/libmtp.h || ! -f .deps/lib/libmtp.a ]]; then
   echo "libmtp wasn't built, so the app can't be built. See the errors above." >&2
   exit 1
 fi

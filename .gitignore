@@ -5,3 +5,4 @@ dist/
 xcuserdata/
 .DS_Store
 .deps/
+Sources/CLibMTP/include/libmtp.h

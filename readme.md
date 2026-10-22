@@ -74,7 +74,7 @@ finished copying are kept.
 
 | Folder | Contents |
 | --- | --- |
-| `Sources/CLibMTP` | Makes libmtp's C functions available to Swift |
+| `Sources/CLibMTP` | Makes libmtp's C functions available to Swift. `build-libmtp.sh` copies libmtp's header into its `include` folder |
 | `Sources/AMFileTransferKit/MTPConnection.swift` | The libmtp wrapper: connect, list, copy, create folders and delete |
 | `Sources/AMFileTransferKit/Transfers.swift` | Copies and deletes whole folders, picks free names, and reports progress |
 | `Sources/AMFileTransfer` | The SwiftUI app |

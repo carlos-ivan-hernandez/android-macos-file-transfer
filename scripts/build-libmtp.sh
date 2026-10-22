@@ -16,8 +16,21 @@ LIBMTP_VERSION="1.1.21"
 LIBMTP_SHA256="f4c1ceb3df020a6cb851110f620c14fe399518c494ed252039cbfb4e34335135"
 
 prefix="${PWD}/.deps"
+header_copy="Sources/CLibMTP/include/libmtp.h"
 stamp="libusb-${LIBUSB_VERSION} libmtp-${LIBMTP_VERSION} macos-${MIN_MACOS}"
+
+# Puts libmtp's header where the CLibMTP target finds it. When the header changes, Swift's
+# build folder is cleared, because it can keep using what it worked out from the old one.
+install_header() {
+  if ! cmp -s "${prefix}/include/libmtp.h" "${header_copy}"; then
+    cp "${prefix}/include/libmtp.h" "${header_copy}"
+    rm -rf .build
+    echo "Copied libmtp's header into Sources/CLibMTP/include and cleared .build"
+  fi
+}
+
 if [[ -f "${prefix}/lib/libmtp.a" && -f "${prefix}/include/libmtp.h" && "$(cat "${prefix}/stamp" 2>/dev/null)" == "${stamp}" ]]; then
+  install_header
   exit 0
 fi
 
@@ -106,4 +119,5 @@ for built in lib/libmtp.a lib/libusb-1.0.a include/libmtp.h; do
   fi
 done
 echo "${stamp}" > "${prefix}/stamp"
+install_header
 echo "Built libusb and libmtp in .deps/"
