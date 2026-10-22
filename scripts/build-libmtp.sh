@@ -14,7 +14,7 @@ LIBMTP_SHA256="f4c1ceb3df020a6cb851110f620c14fe399518c494ed252039cbfb4e34335135"
 
 prefix="$PWD/.deps"
 stamp="libusb-$LIBUSB_VERSION libmtp-$LIBMTP_VERSION macos-$MIN_MACOS"
-if [[ -f "$prefix/lib/libmtp.a" && "$(cat "$prefix/stamp" 2>/dev/null)" == "$stamp" ]]; then
+if [[ -f "$prefix/lib/libmtp.a" && -f "$prefix/include/libmtp.h" && "$(cat "$prefix/stamp" 2>/dev/null)" == "$stamp" ]]; then
   exit 0
 fi
 
@@ -85,5 +85,11 @@ echo "Building libmtp $LIBMTP_VERSION…"
   quiet make -C src install
 )
 
+for built in lib/libmtp.a lib/libusb-1.0.a include/libmtp.h; do
+  if [[ ! -f "$prefix/$built" ]]; then
+    echo "Building the libraries didn't produce .deps/$built." >&2
+    exit 1
+  fi
+done
 echo "$stamp" > "$prefix/stamp"
 echo "Built libusb and libmtp in .deps/"

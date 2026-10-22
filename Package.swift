@@ -7,7 +7,6 @@ import PackageDescription
 // `swift build`, `swift run` or `swift test`. (build.sh runs it for you.)
 let deps = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent(".deps").path
 
-let libmtpHeaders: [SwiftSetting] = [.unsafeFlags(["-Xcc", "-I\(deps)/include"])]
 let libmtpLinking: [LinkerSetting] = [
     .unsafeFlags(["-L\(deps)/lib"]),
     .linkedLibrary("usb-1.0"),
@@ -26,18 +25,9 @@ let package = Package(
         // libmtp, the C library OpenMTP also uses to talk to Android phones over USB.
         .systemLibrary(name: "CLibMTP"),
         // Foundation-only logic: the libmtp wrapper and the copy/delete engine.
-        .target(
-            name: "AMFileTransferKit", dependencies: ["CLibMTP"],
-            swiftSettings: libmtpHeaders, linkerSettings: libmtpLinking
-        ),
+        .target(name: "AMFileTransferKit", dependencies: ["CLibMTP"], linkerSettings: libmtpLinking),
         // The SwiftUI app.
-        .executableTarget(
-            name: "AMFileTransfer", dependencies: ["AMFileTransferKit"],
-            swiftSettings: libmtpHeaders, linkerSettings: libmtpLinking
-        ),
-        .testTarget(
-            name: "AMFileTransferKitTests", dependencies: ["AMFileTransferKit"],
-            swiftSettings: libmtpHeaders, linkerSettings: libmtpLinking
-        ),
+        .executableTarget(name: "AMFileTransfer", dependencies: ["AMFileTransferKit"], linkerSettings: libmtpLinking),
+        .testTarget(name: "AMFileTransferKitTests", dependencies: ["AMFileTransferKit"], linkerSettings: libmtpLinking),
     ]
 )
