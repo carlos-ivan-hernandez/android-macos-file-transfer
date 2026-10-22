@@ -75,7 +75,7 @@ public enum PhoneError: Error, LocalizedError, Equatable {
     }
 }
 
-/// What PhoneFiles needs from a connected phone. `MTPConnection` is the real one; the tests use a fake.
+/// What AM File Transfer needs from a connected phone. `MTPConnection` is the real one; the tests use a fake.
 public protocol PhoneDevice: AnyObject, Sendable {
     func list(storage: UInt32, folder: UInt32) async throws -> [PhoneItem]
     /// Copies a phone file to `url`. `progress` gets the bytes copied so far and returns false to cancel.

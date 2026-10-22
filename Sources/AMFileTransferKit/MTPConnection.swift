@@ -15,7 +15,7 @@ public final class MTPConnection: PhoneDevice, @unchecked Sendable {
         public let productID: UInt16
     }
 
-    private static let queue = DispatchQueue(label: "PhoneFiles.libmtp")
+    private static let queue = DispatchQueue(label: "AMFileTransfer.libmtp")
     private static let initialize: Void = LIBMTP_Init()
 
     /// Only touched on `queue`.

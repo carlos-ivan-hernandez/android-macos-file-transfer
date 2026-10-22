@@ -1,5 +1,5 @@
 import AppKit
-import PhoneFilesKit
+import AMFileTransferKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -212,15 +212,17 @@ struct ItemMenu: View {
 }
 
 /// Finder-style columns: one per open folder, plus a preview of a selected file.
+/// The arrow keys move through the columns while the browser has keyboard focus.
 struct ColumnBrowser: View {
     @EnvironmentObject private var model: PhoneModel
+    @FocusState private var focused: Bool
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal) {
                 HStack(spacing: 0) {
                     ForEach(0...model.path.count, id: \.self) { column in
-                        BrowserColumn(column: column)
+                        BrowserColumn(column: column, browserFocused: focused) { focused = true }
                             .frame(width: 240)
                             .id(column)
                         Divider()
@@ -241,6 +243,12 @@ struct ColumnBrowser: View {
                 if id != nil { withAnimation { proxy.scrollTo("preview", anchor: .trailing) } }
             }
         }
+        .focusable()
+        .focused($focused)
+        .hideFocusRing()
+        .onMoveCommand { direction in model.moveInColumns(direction) }
+        .onDeleteCommand { model.confirmDelete(model.actionItems) }
+        .onAppear { focused = true }
         .disabled(model.isBusy)
     }
 }
@@ -248,34 +256,48 @@ struct ColumnBrowser: View {
 struct BrowserColumn: View {
     @EnvironmentObject private var model: PhoneModel
     let column: Int
+    let browserFocused: Bool
+    /// Gives the browser keyboard focus, so the arrow keys work after a click.
+    let focusBrowser: () -> Void
 
     var body: some View {
-        let items = model.columnItems(column)
-        List(selection: Binding(
-            get: { model.columnSelection(column) },
-            set: { model.selectInColumn(column, $0) }
-        )) {
-            ForEach(items) { item in
-                HStack(spacing: 6) {
-                    Image(nsImage: FileIcons.icon(for: item))
-                        .resizable()
-                        .frame(width: 16, height: 16)
-                    Text(item.name)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    if item.isFolder {
-                        Image(systemName: "chevron.right")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
+        let rows = model.columnItems(column)
+        let selected = model.columnSelection(column)
+        // Like Finder, the column with the cursor shows its selection in the accent color.
+        let emphasized = browserFocused && column == max(model.cursorColumn, 0)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    ForEach(rows) { item in
+                        ColumnRow(item: item, isSelected: selected.contains(item.id), emphasized: emphasized)
+                            .id(item.id)
+                            .onTapGesture { click(item) }
+                            .contextMenu {
+                                // Right-clicking a selected row acts on the whole selection.
+                                let chosen = selected.contains(item.id) ? rows.filter { selected.contains($0.id) } : [item]
+                                ItemMenu(items: chosen, canAddHere: false)
+                            }
                     }
                 }
-                .tag(item.id)
+                .padding(.vertical, 4)
+                .padding(.horizontal, 6)
+            }
+            .onChange(of: selected) { ids in
+                guard let id = rows.first(where: { ids.contains($0.id) })?.id else { return }
+                withAnimation(.easeOut(duration: 0.1)) { proxy.scrollTo(id) }
             }
         }
-        .listStyle(.plain)
+        .background {
+            // Right-clicking empty space in the last column adds to that folder.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { focusBrowser() }
+                .contextMenu {
+                    if column == model.path.count { ItemMenu(items: [], canAddHere: true) }
+                }
+        }
         .overlay {
-            if items.isEmpty {
+            if rows.isEmpty {
                 if model.isColumnLoading(column) {
                     ProgressView().controlSize(.small)
                 } else {
@@ -283,15 +305,60 @@ struct BrowserColumn: View {
                 }
             }
         }
-        .contextMenu(forSelectionType: PhoneItem.ID.self) { ids in
-            ItemMenu(
-                items: items.filter { ids.contains($0.id) },
-                canAddHere: column == model.path.count
-            )
-        } primaryAction: { ids in
-            if ids.count == 1, let item = items.first(where: { ids.contains($0.id) }), !item.isFolder {
-                model.open(item)
+    }
+
+    private func click(_ item: PhoneItem) {
+        focusBrowser()
+        let flags = NSEvent.modifierFlags
+        model.click(
+            item, inColumn: column,
+            toggle: flags.contains(.command), range: flags.contains(.shift),
+            double: (NSApp.currentEvent?.clickCount ?? 1) >= 2
+        )
+    }
+}
+
+struct ColumnRow: View {
+    let item: PhoneItem
+    let isSelected: Bool
+    let emphasized: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(nsImage: FileIcons.icon(for: item))
+                .resizable()
+                .frame(width: 16, height: 16)
+            Text(item.name)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            if item.isFolder {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(isSelected && emphasized ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
             }
+        }
+        .foregroundStyle(isSelected && emphasized ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(emphasized ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.secondary.opacity(0.25)))
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+extension View {
+    /// Keyboard focus is shown by the selection color instead of a ring around the browser.
+    @ViewBuilder
+    func hideFocusRing() -> some View {
+        if #available(macOS 14.0, *) {
+            focusEffectDisabled()
+        } else {
+            self
         }
     }
 }

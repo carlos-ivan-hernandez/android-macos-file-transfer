@@ -1,5 +1,5 @@
 import Foundation
-@testable import PhoneFilesKit
+@testable import AMFileTransferKit
 import XCTest
 
 /// An in-memory phone.
@@ -84,11 +84,11 @@ final class FakePhone: PhoneDevice, @unchecked Sendable {
     }
 }
 
-final class PhoneFilesKitTests: XCTestCase {
+final class AMFileTransferKitTests: XCTestCase {
     var temp: URL!
 
     override func setUpWithError() throws {
-        temp = FileManager.default.temporaryDirectory.appendingPathComponent("PhoneFilesTests-\(UUID().uuidString)")
+        temp = FileManager.default.temporaryDirectory.appendingPathComponent("AMFileTransferTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
     }
 

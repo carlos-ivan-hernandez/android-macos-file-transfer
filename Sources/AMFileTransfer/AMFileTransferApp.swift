@@ -2,12 +2,31 @@ import AppKit
 import SwiftUI
 
 @main
-struct PhoneFilesApp: App {
+@MainActor
+enum Entry {
+    static func main() {
+        // `AMFileTransfer icon <image> <output.icns>` draws this app's own icon. build.sh uses it.
+        let arguments = CommandLine.arguments
+        if arguments.count == 4, arguments[1] == "icon" {
+            do {
+                guard let image = NSImage(contentsOfFile: arguments[2]) else { throw IconError.failed }
+                try IconMaker.writeICNS(IconMaker.gridIcon(from: image), to: URL(fileURLWithPath: arguments[3]))
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("\(error.localizedDescription)\n".utf8))
+                exit(1)
+            }
+        }
+        AMFileTransferApp.main()
+    }
+}
+
+struct AMFileTransferApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @StateObject private var model = PhoneModel()
 
     var body: some Scene {
-        Window("PhoneFiles", id: "main") {
+        Window("AM File Transfer", id: "main") {
             ContentView()
                 .environmentObject(model)
                 .frame(minWidth: 720, minHeight: 420)

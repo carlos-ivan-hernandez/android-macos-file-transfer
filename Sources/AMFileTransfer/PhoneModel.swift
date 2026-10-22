@@ -1,5 +1,5 @@
 import AppKit
-import PhoneFilesKit
+import AMFileTransferKit
 import SwiftUI
 
 /// The size of the selected items. `summary` is nil while folders are still being added up.
@@ -77,6 +77,8 @@ final class PhoneModel: ObservableObject {
     private var sizeTask: Task<Void, Never>?
     private var connecting = false
     private var loadGenerations: [UInt32: Int] = [:]
+    /// The row the keyboard and ⇧-click work from in column view.
+    private var selectionAnchor: PhoneItem.ID?
 
     private static let lastFolderKey = "LastCopyToMacFolder"
     private static let viewModeKey = "ViewMode"
@@ -154,6 +156,74 @@ final class PhoneModel: ObservableObject {
             navigated()
         } else {
             selection = ids
+        }
+    }
+
+    /// The column holding the keyboard cursor: the last column when something in it is selected,
+    /// otherwise the column of the highlighted folder. -1 when nothing is highlighted.
+    var cursorColumn: Int { selection.isEmpty ? path.count - 1 : path.count }
+
+    /// A click on a row in column view. ⌘ adds or removes the row, ⇧ selects a range, and a
+    /// double-click on a file opens it.
+    func click(_ item: PhoneItem, inColumn column: Int, toggle: Bool, range: Bool, double: Bool) {
+        guard !isBusy else { return }
+        let current = columnSelection(column)
+        var ids: Set<PhoneItem.ID> = [item.id]
+        if toggle {
+            ids = current.symmetricDifference([item.id])
+        } else if range, let anchor = selectionAnchor, current.contains(anchor) {
+            let rows = columnItems(column)
+            if let from = rows.firstIndex(where: { $0.id == anchor }),
+               let to = rows.firstIndex(where: { $0.id == item.id }) {
+                ids = Set(rows[min(from, to)...max(from, to)].map(\.id))
+            }
+        }
+        selectInColumn(column, ids)
+        if !range { selectionAnchor = item.id }
+        if double, !item.isFolder { open(item) }
+    }
+
+    /// Arrow keys in column view, as in Finder: ↑ and ↓ move within a column, → goes into the
+    /// highlighted folder, and ← goes back to the folder that contains the cursor.
+    func moveInColumns(_ direction: MoveCommandDirection) {
+        guard !isBusy else { return }
+        switch direction {
+        case .up, .down:
+            let column = max(cursorColumn, 0)
+            let rows = columnItems(column)
+            guard !rows.isEmpty else { return }
+            let currentID: PhoneItem.ID?
+            if selection.isEmpty {
+                currentID = path.last?.id
+            } else if let anchor = selectionAnchor, selection.contains(anchor) {
+                currentID = anchor
+            } else {
+                currentID = rows.first { selection.contains($0.id) }?.id
+            }
+            let next: Int
+            if let index = rows.firstIndex(where: { $0.id == currentID }) {
+                next = direction == .up ? max(index - 1, 0) : min(index + 1, rows.count - 1)
+            } else {
+                next = direction == .up ? rows.count - 1 : 0
+            }
+            selectInColumn(column, [rows[next].id])
+            selectionAnchor = rows[next].id
+        case .right:
+            // Only a highlighted folder (with nothing selected inside it) can be entered.
+            guard selection.isEmpty, !path.isEmpty, let first = columnItems(path.count).first else { return }
+            selectInColumn(path.count, [first.id])
+            selectionAnchor = first.id
+        case .left:
+            if !selection.isEmpty {
+                guard !path.isEmpty else { return }
+                selection = []
+                selectionAnchor = path.last?.id
+            } else if path.count >= 2 {
+                path.removeLast()
+                selectionAnchor = path.last?.id
+            }
+        @unknown default:
+            break
         }
     }
 
@@ -369,7 +439,7 @@ final class PhoneModel: ObservableObject {
     /// Copies a phone file to a temporary folder and opens it in its Mac app.
     func openOnMac(_ item: PhoneItem) {
         let folder = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PhoneFiles-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("AMFileTransfer-\(UUID().uuidString)", isDirectory: true)
         runTransfer(refreshAfter: false) { transfers in
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             if let copied = try await transfers.copyToMac([item], into: folder).first {

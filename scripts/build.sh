@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds "dist/PhoneFiles.app". Pass --install to also copy it into /Applications.
+# Builds "dist/AM File Transfer.app". Pass --install to also copy it into /Applications.
 # Needs libmtp from Homebrew: brew install libmtp pkg-config
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -12,13 +12,13 @@ fi
 swift build -c release
 bin_dir="$(swift build -c release --show-bin-path)"
 
-app="dist/PhoneFiles.app"
+app="dist/AM File Transfer.app"
 frameworks="$app/Contents/Frameworks"
-binary="$app/Contents/MacOS/PhoneFiles"
+binary="$app/Contents/MacOS/AMFileTransfer"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$frameworks"
 cp Support/Info.plist "$app/Contents/Info.plist"
-cp "$bin_dir/PhoneFiles" "$binary"
+cp "$bin_dir/AMFileTransfer" "$binary"
 
 # Copy libmtp and the Homebrew libraries it needs (libusb) into the app, so the app
 # keeps working after Homebrew updates and runs on Macs without Homebrew.
@@ -42,15 +42,22 @@ bundle_libraries() {
 bundle_libraries "$binary"
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$binary" 2>/dev/null || true
 
-xattr -cr "$app"
+# Changing library paths breaks the signatures, and Apple silicon won't run unsigned code,
+# so sign the libraries and the binary before running it below.
 for library in "$frameworks"/*.dylib; do
   [[ -e "$library" ]] && codesign --force --sign - "$library"
 done
+codesign --force --sign - "$binary"
+
+# The app's icon is Support/AppIcon.png, put on the macOS icon grid by the app itself.
+"$binary" icon Support/AppIcon.png "$app/Contents/Resources/AppIcon.icns"
+
+xattr -cr "$app"
 codesign --force --sign - "$app"
 echo "Built $app"
 
 if [[ "${1:-}" == "--install" ]]; then
-  rm -rf "/Applications/PhoneFiles.app"
+  rm -rf "/Applications/AM File Transfer.app"
   cp -R "$app" /Applications/
-  echo "Installed /Applications/PhoneFiles.app"
+  echo "Installed /Applications/AM File Transfer.app"
 fi

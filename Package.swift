@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "PhoneFiles",
+    name: "AMFileTransfer",
     platforms: [.macOS(.v13)],
     targets: [
         // libmtp, the C library OpenMTP also uses to talk to Android phones over USB.
@@ -12,9 +12,9 @@ let package = Package(
             providers: [.brew(["libmtp"]), .apt(["libmtp-dev"])]
         ),
         // Foundation-only logic: the libmtp wrapper and the copy/delete engine.
-        .target(name: "PhoneFilesKit", dependencies: ["CLibMTP"]),
+        .target(name: "AMFileTransferKit", dependencies: ["CLibMTP"]),
         // The SwiftUI app.
-        .executableTarget(name: "PhoneFiles", dependencies: ["PhoneFilesKit"]),
-        .testTarget(name: "PhoneFilesKitTests", dependencies: ["PhoneFilesKit"]),
+        .executableTarget(name: "AMFileTransfer", dependencies: ["AMFileTransferKit"]),
+        .testTarget(name: "AMFileTransferKitTests", dependencies: ["AMFileTransferKit"]),
     ]
 )

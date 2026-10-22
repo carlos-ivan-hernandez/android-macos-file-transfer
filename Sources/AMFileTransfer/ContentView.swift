@@ -1,4 +1,4 @@
-import PhoneFilesKit
+import AMFileTransferKit
 import SwiftUI
 
 struct ContentView: View {
@@ -139,7 +139,7 @@ struct ConnectView: View {
                     .lineLimit(4)
                     .frame(maxWidth: 440)
             }
-            Text("PhoneFiles keeps trying every few seconds.")
+            Text("AM File Transfer keeps trying every few seconds.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
