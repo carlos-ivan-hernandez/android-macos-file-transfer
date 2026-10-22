@@ -9,20 +9,24 @@ OpenMTP also uses to talk to Android phones. The app itself is SwiftUI.
 ## Requirements
 
 - macOS 13 Ventura or later
-- To build: Xcode or the Xcode command line tools (`xcode-select --install`), and
-  [Homebrew](https://brew.sh) for libmtp
+- To build: Xcode or the Xcode command line tools (`xcode-select --install`), and an internet
+  connection the first time
 
 ## Build
 
 ```bash
-brew install libmtp pkg-config   # once
 ./scripts/build.sh               # creates "dist/AM File Transfer.app"
 ./scripts/build.sh --install     # also copies it into /Applications
+./scripts/build-libmtp.sh        # once, before using swift directly:
 swift run AMFileTransfer         # run without making an app bundle
 swift test                       # run the tests
 ```
 
-`build.sh` copies libmtp and libusb into the app, so the built app doesn't need Homebrew.
+`build-libmtp.sh` downloads libusb and libmtp, checks them against known checksums, and builds
+them into `.deps/` for macOS 13. They're linked into the app itself, so it runs on macOS 13 and
+later without Homebrew. `build.sh` runs it for you, and it does nothing once `.deps/` is up to
+date. To update either library, change its version and checksum at the top of the script. If
+you change the app's minimum macOS version, change it in both `Package.swift` and the script.
 
 ## Connecting the phone
 

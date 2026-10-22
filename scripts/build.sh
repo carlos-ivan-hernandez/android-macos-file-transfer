@@ -1,53 +1,20 @@
 #!/usr/bin/env bash
 # Builds "dist/AM File Transfer.app". Pass --install to also copy it into /Applications.
-# Needs libmtp from Homebrew: brew install libmtp pkg-config
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if ! pkg-config --exists libmtp 2>/dev/null; then
-  echo "libmtp isn't installed. Install it with: brew install libmtp pkg-config" >&2
-  exit 1
-fi
+# libusb and libmtp, built for the app's minimum macOS version and linked into the app.
+./scripts/build-libmtp.sh
 
 swift build -c release
 bin_dir="$(swift build -c release --show-bin-path)"
 
 app="dist/AM File Transfer.app"
-frameworks="$app/Contents/Frameworks"
 binary="$app/Contents/MacOS/AMFileTransfer"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$frameworks"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp Support/Info.plist "$app/Contents/Info.plist"
 cp "$bin_dir/AMFileTransfer" "$binary"
-
-# Copy libmtp and the Homebrew libraries it needs (libusb) into the app, so the app
-# keeps working after Homebrew updates and runs on Macs without Homebrew.
-bundle_libraries() {
-  local file="$1" dep name
-  for dep in $(otool -L "$file" | tail -n +2 | awk '{print $1}'); do
-    case "$dep" in
-      /opt/homebrew/*|/usr/local/*) ;;
-      *) continue ;;
-    esac
-    name="$(basename "$dep")"
-    if [[ ! -f "$frameworks/$name" ]]; then
-      cp "$dep" "$frameworks/$name"
-      chmod u+w "$frameworks/$name"
-      install_name_tool -id "@rpath/$name" "$frameworks/$name"
-      bundle_libraries "$frameworks/$name"
-    fi
-    install_name_tool -change "$dep" "@rpath/$name" "$file"
-  done
-}
-bundle_libraries "$binary"
-install_name_tool -add_rpath "@executable_path/../Frameworks" "$binary" 2>/dev/null || true
-
-# Changing library paths breaks the signatures, and Apple silicon won't run unsigned code,
-# so sign the libraries and the binary before running it below.
-for library in "$frameworks"/*.dylib; do
-  [[ -e "$library" ]] && codesign --force --sign - "$library"
-done
-codesign --force --sign - "$binary"
 
 # The app's icon is Support/AppIcon.png, put on the macOS icon grid by the app itself.
 "$binary" icon Support/AppIcon.png "$app/Contents/Resources/AppIcon.icns"
